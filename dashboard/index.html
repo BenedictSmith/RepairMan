@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepairMan Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin-bottom: 20px; color: #222; }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .card .label { font-size: 0.8rem; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
+  .card .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+
+  /* Filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; align-items: center; }
+  .filters select, .filters input { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; background: #fff; }
+  .filters label { font-size: 0.85rem; color: #666; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  th { background: #f9f9f9; text-align: left; padding: 10px 14px; font-size: 0.8rem; text-transform: uppercase; color: #666; letter-spacing: 0.5px; cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { background: #f0f0f0; }
+  th .arrow { font-size: 0.7rem; margin-left: 4px; }
+  td { padding: 10px 14px; border-top: 1px solid #eee; font-size: 0.9rem; }
+  tr:hover td { background: #fafafa; }
+
+  /* Badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge-urgent    { background: #fee; color: #c0392b; }
+  .badge-high      { background: #fef3e2; color: #e67e22; }
+  .badge-medium    { background: #eef6ff; color: #2980b9; }
+  .badge-low       { background: #f0f0f0; color: #777; }
+
+  .status-not-started       { color: #999; }
+  .status-in-progress       { color: #2980b9; }
+  .status-waiting-on-parts  { color: #e67e22; }
+  .status-completed         { color: #27ae60; }
+  .status-abandoned         { color: #bbb; }
+
+  .tag { display: inline-block; background: #e8e8e8; padding: 1px 6px; border-radius: 3px; font-size: 0.75rem; margin-right: 3px; }
+  .cost { font-variant-numeric: tabular-nums; }
+  .empty { color: #ccc; }
+  .footer { margin-top: 12px; font-size: 0.8rem; color: #999; text-align: right; }
+</style>
+</head>
+<body>
+
+<h1>RepairMan Dashboard</h1>
+
+<div class="cards" id="cards"></div>
+
+<div class="filters">
+  <div>
+    <label>Status</label>
+    <select id="f-status">
+      <option value="">All</option>
+      <option value="not-started">Not Started</option>
+      <option value="in-progress">In Progress</option>
+      <option value="waiting-on-parts">Waiting on Parts</option>
+      <option value="completed">Completed</option>
+      <option value="abandoned">Abandoned</option>
+    </select>
+  </div>
+  <div>
+    <label>Priority</label>
+    <select id="f-priority">
+      <option value="">All</option>
+      <option value="urgent">Urgent</option>
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+  </div>
+  <div>
+    <label>Location</label>
+    <input type="text" id="f-location" placeholder="Filter...">
+  </div>
+  <div>
+    <label>Tag</label>
+    <input type="text" id="f-tag" placeholder="Filter...">
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr id="table-head"></tr>
+    </thead>
+    <tbody id="table-body"></tbody>
+  </table>
+</div>
+
+<div class="footer" id="footer"></div>
+
+<script>
+const PRIORITY_ORDER = { urgent: 0, high: 1, medium: 2, low: 3 };
+const COLUMNS = [
+  { key: "title",     label: "Repair" },
+  { key: "status",    label: "Status" },
+  { key: "priority",  label: "Priority" },
+  { key: "started",   label: "Started" },
+  { key: "cost",      label: "Cost" },
+  { key: "location",  label: "Location" },
+  { key: "tags",      label: "Tags" },
+];
+
+let DATA = { repairs: [], summary: {} };
+let sortCol = "priority";
+let sortAsc = true;
+
+// Fetch data
+function loadData() {
+  fetch("data.json?" + Date.now())
+    .then(r => r.json())
+    .then(d => { DATA = d; render(); })
+    .catch(() => {
+      document.getElementById("cards").innerHTML = '<div class="card"><div class="label">Error</div><div class="value" style="font-size:1rem">Could not load data.json. Run: python db/sync.py sync</div></div>';
+    });
+}
+loadData();
+
+// Live reload via Server-Sent Events
+const evtSource = new EventSource("/events");
+evtSource.onmessage = () => loadData();
+
+function render() {
+  renderCards(DATA.summary);
+  renderHead();
+  renderTable();
+}
+
+function renderCards(s) {
+  const active = (s.by_status?.["not-started"] || 0) + (s.by_status?.["in-progress"] || 0) + (s.by_status?.["waiting-on-parts"] || 0);
+  document.getElementById("cards").innerHTML = [
+    card("Total Repairs", s.total),
+    card("Active", active),
+    card("Completed", s.by_status?.completed || 0),
+    card("Total Cost", "$" + (s.total_cost || 0).toFixed(2)),
+  ].join("");
+}
+
+function card(label, value) {
+  return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+}
+
+function renderHead() {
+  const tr = document.getElementById("table-head");
+  tr.innerHTML = COLUMNS.map(c => {
+    const arrow = sortCol === c.key ? (sortAsc ? "\u25b2" : "\u25bc") : "";
+    return `<th data-col="${c.key}">${c.label}<span class="arrow">${arrow}</span></th>`;
+  }).join("");
+  tr.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc; else { sortCol = col; sortAsc = true; }
+    renderHead();
+    renderTable();
+  }));
+}
+
+function getFilters() {
+  return {
+    status: document.getElementById("f-status").value,
+    priority: document.getElementById("f-priority").value,
+    location: document.getElementById("f-location").value.toLowerCase(),
+    tag: document.getElementById("f-tag").value.toLowerCase(),
+  };
+}
+
+function applyFilters(repairs) {
+  const f = getFilters();
+  return repairs.filter(r =>
+    (!f.status   || r.status === f.status) &&
+    (!f.priority || r.priority === f.priority) &&
+    (!f.location || (r.location || "").toLowerCase().includes(f.location)) &&
+    (!f.tag      || (r.tags || []).some(t => t.toLowerCase().includes(f.tag)))
+  );
+}
+
+function sortRepairs(repairs) {
+  return [...repairs].sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (sortCol === "priority") { va = PRIORITY_ORDER[va] ?? 9; vb = PRIORITY_ORDER[vb] ?? 9; }
+    else if (sortCol === "cost") { va = va || 0; vb = vb || 0; }
+    else if (sortCol === "tags") { va = (va || []).join(","); vb = (vb || []).join(","); }
+    else { va = va || ""; vb = vb || ""; }
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+}
+
+function renderTable() {
+  const filtered = sortRepairs(applyFilters(DATA.repairs));
+  const tbody = document.getElementById("table-body");
+  const totalCost = filtered.reduce((s, r) => s + (r.cost || 0), 0);
+
+  tbody.innerHTML = filtered.map(r => `<tr>
+    <td><strong>${esc(r.title)}</strong></td>
+    <td><span class="status-${r.status}">${esc(r.status)}</span></td>
+    <td><span class="badge badge-${r.priority}">${esc(r.priority)}</span></td>
+    <td>${r.started || '<span class="empty">-</span>'}</td>
+    <td class="cost">${r.cost ? "$" + r.cost.toFixed(2) : '<span class="empty">-</span>'}</td>
+    <td>${r.location || '<span class="empty">-</span>'}</td>
+    <td>${(r.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="empty">-</span>'}</td>
+  </tr>`).join("");
+
+  document.getElementById("footer").textContent = `${filtered.length} repair${filtered.length !== 1 ? "s" : ""} \u2022 $${totalCost.toFixed(2)} total`;
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// Filter event listeners
+["f-status", "f-priority"].forEach(id => document.getElementById(id).addEventListener("change", renderTable));
+["f-location", "f-tag"].forEach(id => document.getElementById(id).addEventListener("input", renderTable));
+</script>
+</body>
+</html>

@@ -3,9 +3,9 @@ title: "Fix kitchen faucet"
 status: in-progress
 priority: high
 started: 2026-03-26
-completed:
+completed: 
 parts: ["cartridge valve", "plumber's tape"]
-cost: 12.50
+cost: 12.5
 tags: [plumbing, kitchen]
 location: "kitchen"
 ---
