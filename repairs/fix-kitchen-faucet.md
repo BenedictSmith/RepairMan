@@ -1,12 +1,15 @@
 ---
-title: "Fix kitchen faucet"
+title: Fix kitchen faucet
 status: in-progress
 priority: high
 started: 2026-03-26
 completed:
-cost: 12.5
-tags: [plumbing, kitchen]
-location: "kitchen"
+cost: 20.5
+tags:
+  - plumbing
+  - kitchen
+location: kitchen
+currency: £
 ---
 
 ## Problem
@@ -26,10 +29,11 @@ Kitchen faucet is dripping from the handle when turned off. Likely a worn cartri
 
 ## Cost Breakdown
 
-| Item | Type | Cost |
-|------|------|------|
-| Moen 1225 cartridge | parts | $10.50 |
-| Plumber's tape | parts | $2.00 |
+| Item                | Type  | Cost   |
+| ------------------- | ----- | ------ |
+| Moen 1225 cartridge | parts | £10.50 |
+| Plumber's tape      | parts | £2.00  |
+| Monkey Wrench       | tool  | £8.00  |
 
 ## Notes
 

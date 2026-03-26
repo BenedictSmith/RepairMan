@@ -57,11 +57,13 @@ def init_db(db_path):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON repairs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_priority ON repairs(priority)")
 
-    # Migration: add cost_items column if missing
+    # Migrations: add columns if missing
     cursor = conn.execute("PRAGMA table_info(repairs)")
     columns = {row[1] for row in cursor.fetchall()}
     if "cost_items" not in columns:
         conn.execute("ALTER TABLE repairs ADD COLUMN cost_items TEXT DEFAULT '[]'")
+    if "currency" not in columns:
+        conn.execute("ALTER TABLE repairs ADD COLUMN currency TEXT DEFAULT 'kr'")
 
     conn.commit()
     return conn
@@ -209,7 +211,7 @@ def parse_cost_table(body_text):
 
         description = cells[0].strip()
         cost_type = cells[1].strip().lower()
-        cost_str = cells[2].strip().lstrip("$").replace(",", "")
+        cost_str = cells[2].strip().lstrip("$€£").replace("kr", "").replace(",", "").strip().rstrip("$€£")
 
         try:
             cost = float(cost_str)
@@ -228,14 +230,28 @@ def parse_cost_table(body_text):
     return items
 
 
-def generate_cost_table(cost_items):
+CURRENCY_FORMAT = {
+    "kr":  {"suffix": " kr"},
+    "$":   {"prefix": "$"},
+    "€":   {"suffix": " €"},
+    "£":   {"prefix": "£"},
+}
+
+
+def format_cost(amount, currency="kr"):
+    """Format a cost amount with the given currency symbol."""
+    fmt = CURRENCY_FORMAT.get(currency, {"suffix": " " + currency})
+    return fmt.get("prefix", "") + f"{amount:.2f}" + fmt.get("suffix", "")
+
+
+def generate_cost_table(cost_items, currency="kr"):
     """Generate a markdown Cost Breakdown table from cost_items list."""
     lines = [
         "| Item | Type | Cost |",
         "|------|------|------|",
     ]
     for item in cost_items:
-        cost_str = f"${item['cost']:.2f}"
+        cost_str = format_cost(item["cost"], currency)
         lines.append(f"| {item['description']} | {item['type']} | {cost_str} |")
     return "\n".join(lines)
 
@@ -285,8 +301,9 @@ def generate_markdown(record):
     cost = fm.get("cost", 0) or 0
     cost_str = int(cost) if cost == int(cost) else cost
 
+    currency = fm.get("currency", "kr")
     cost_items = fm.get("cost_items", [])
-    cost_table = generate_cost_table(cost_items)
+    cost_table = generate_cost_table(cost_items, currency)
 
     lines = [
         "---",
@@ -298,6 +315,7 @@ def generate_markdown(record):
         f'cost: {cost_str}',
         f'tags: {format_array_for_frontmatter(fm.get("tags", []), quoted=False)}',
         f'location: "{fm.get("location", "")}"',
+        f'currency: {currency}',
         "---",
         "",
         "## Problem",
@@ -354,17 +372,18 @@ def import_repair(conn, repair_id, filepath):
         "cost_items": cost_items,
         "tags": fm.get("tags", []),
         "location": fm.get("location", ""),
+        "currency": fm.get("currency", "kr"),
         "body": body_sections,
     }
 
     conn.execute("""
-        INSERT INTO repairs (id, title, status, priority, started, completed, cost, location, tags, parts, cost_items, data, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO repairs (id, title, status, priority, started, completed, cost, location, tags, parts, cost_items, currency, data, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, status=excluded.status, priority=excluded.priority,
             started=excluded.started, completed=excluded.completed, cost=excluded.cost,
             location=excluded.location, tags=excluded.tags, parts=excluded.parts,
-            cost_items=excluded.cost_items,
+            cost_items=excluded.cost_items, currency=excluded.currency,
             data=excluded.data, updated_at=datetime('now')
     """, (
         repair_id,
@@ -378,6 +397,7 @@ def import_repair(conn, repair_id, filepath):
         json.dumps(data["tags"]),
         json.dumps([]),  # parts — legacy, always empty now
         json.dumps(data["cost_items"]),
+        data["currency"],
         json.dumps(data),
     ))
 
@@ -431,7 +451,7 @@ def export_json(db_path, json_path):
     """Export repairs to JSON for the web dashboard."""
     conn = init_db(db_path)
     rows = conn.execute("""
-        SELECT id, title, status, priority, started, completed, cost, location, tags, cost_items
+        SELECT id, title, status, priority, started, completed, cost, location, tags, cost_items, currency
         FROM repairs ORDER BY
             CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
             started DESC
@@ -446,7 +466,7 @@ def export_json(db_path, json_path):
         "other_cost": 0,
         "by_status": {},
         "by_priority": {},
-        "by_location": {},
+        "by_currency": {},
         "by_tag": {},
     }
 
@@ -463,6 +483,7 @@ def export_json(db_path, json_path):
             "cost": row["cost"] or 0,
             "cost_items": cost_items,
             "location": row["location"] or "",
+            "currency": row["currency"] or "kr",
             "tags": tags,
         }
         repairs.append(repair)
@@ -480,8 +501,8 @@ def export_json(db_path, json_path):
                 summary["other_cost"] += item["cost"]
         summary["by_status"][repair["status"]] = summary["by_status"].get(repair["status"], 0) + 1
         summary["by_priority"][repair["priority"]] = summary["by_priority"].get(repair["priority"], 0) + 1
-        if repair["location"]:
-            summary["by_location"][repair["location"]] = summary["by_location"].get(repair["location"], 0) + 1
+        currency = repair["currency"]
+        summary["by_currency"][currency] = summary["by_currency"].get(currency, 0) + 1
         for tag in tags:
             summary["by_tag"][tag] = summary["by_tag"].get(tag, 0) + 1
 
@@ -499,7 +520,7 @@ def export_json(db_path, json_path):
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     conn.close()
-    print(f"Wrote {json_path} ({summary['total']} repairs, ${summary['total_cost']:.2f} total)")
+    print(f"Wrote {json_path} ({summary['total']} repairs, {summary['total_cost']:.2f} kr total)")
 
 
 # ---------------------------------------------------------------------------

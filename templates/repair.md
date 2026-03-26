@@ -7,6 +7,7 @@ completed:
 cost: 0
 tags: []
 location: "{{LOCATION}}"
+currency: kr
 ---
 
 ## Problem

@@ -8,6 +8,7 @@ cost: 15
 tags:
   - electronics
 location: ""
+currency: €
 ---
 
 ## Problem
