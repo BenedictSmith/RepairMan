@@ -1,2 +1,4 @@
 db/repairman.db
+db/__pycache__/
 dashboard/data.json
+inbox/

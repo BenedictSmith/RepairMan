@@ -21,6 +21,14 @@ Create a new repair tracking file.
    - `{{LOCATION}}`: The location provided
    - Fill in the Problem section with the description
 
-5. Confirm creation and show the user the file path.
+5. If the user mentions any parts or costs upfront, add rows to the `## Cost Breakdown` table:
+   ```
+   | Item | Type | Cost |
+   |------|------|------|
+   | Item name | parts | $10.00 |
+   ```
+   Types: `parts`, `labour`, `other`. Update the `cost:` field in frontmatter to match the table total.
+
+6. Confirm creation and show the user the file path.
 
 $ARGUMENTS will contain any details the user already provided — extract what you can and only ask for missing required fields (title is required, everything else has defaults).

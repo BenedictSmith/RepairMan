@@ -26,6 +26,7 @@ JSON_PATH = PROJECT_DIR / "dashboard" / "data.json"
 PRIORITY_ORDER = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
 VALID_STATUSES = {"not-started", "in-progress", "waiting-on-parts", "completed", "abandoned"}
 VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
+VALID_COST_TYPES = {"parts", "labour", "other"}
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ def init_db(db_path):
             location    TEXT DEFAULT '',
             tags        TEXT DEFAULT '[]',
             parts       TEXT DEFAULT '[]',
+            cost_items  TEXT DEFAULT '[]',
             data        TEXT NOT NULL,
             created_at  TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -54,6 +56,13 @@ def init_db(db_path):
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON repairs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_priority ON repairs(priority)")
+
+    # Migration: add cost_items column if missing
+    cursor = conn.execute("PRAGMA table_info(repairs)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "cost_items" not in columns:
+        conn.execute("ALTER TABLE repairs ADD COLUMN cost_items TEXT DEFAULT '[]'")
+
     conn.commit()
     return conn
 
@@ -157,6 +166,105 @@ def parse_body_sections(body):
 
 
 # ---------------------------------------------------------------------------
+# Cost Breakdown table parser
+# ---------------------------------------------------------------------------
+
+def parse_cost_table(body_text):
+    """Parse the ## Cost Breakdown markdown table from the body.
+
+    Expected format:
+        | Item | Type | Cost |
+        |------|------|------|
+        | Cartridge valve | parts | $10.50 |
+
+    Returns a list of dicts: [{"description": str, "type": str, "cost": float}]
+    """
+    items = []
+
+    # Find the Cost Breakdown section
+    match = re.search(r"## Cost Breakdown\s*\n(.*?)(?=\n## |\Z)", body_text, re.DOTALL)
+    if not match:
+        return items
+
+    table_text = match.group(1)
+
+    for line in table_text.splitlines():
+        line = line.strip()
+        # Skip header row, separator row, empty lines
+        if not line or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")]
+        # split on | gives empty strings at start/end: ['', 'Item', 'Type', 'Cost', '']
+        cells = [c for c in cells if c != ""]
+
+        if len(cells) < 3:
+            continue
+
+        # Skip header and separator rows
+        if cells[0].lower() in ("item", "---", "------") or set(cells[0]) <= {"-", " ", ":"}:
+            continue
+        # Skip separator-like rows
+        if all(set(c) <= {"-", " ", ":"} for c in cells):
+            continue
+
+        description = cells[0].strip()
+        cost_type = cells[1].strip().lower()
+        cost_str = cells[2].strip().lstrip("$").replace(",", "")
+
+        try:
+            cost = float(cost_str)
+        except ValueError:
+            cost = 0
+
+        if cost_type not in VALID_COST_TYPES:
+            cost_type = "other"
+
+        items.append({
+            "description": description,
+            "type": cost_type,
+            "cost": cost,
+        })
+
+    return items
+
+
+def generate_cost_table(cost_items):
+    """Generate a markdown Cost Breakdown table from cost_items list."""
+    lines = [
+        "| Item | Type | Cost |",
+        "|------|------|------|",
+    ]
+    for item in cost_items:
+        cost_str = f"${item['cost']:.2f}"
+        lines.append(f"| {item['description']} | {item['type']} | {cost_str} |")
+    return "\n".join(lines)
+
+
+def compute_cost_total(cost_items):
+    """Sum all cost_items and return rounded total."""
+    return round(sum(item["cost"] for item in cost_items), 2)
+
+
+def update_frontmatter_cost(filepath, new_cost):
+    """Update the cost: field in a markdown file's frontmatter without rewriting the whole file."""
+    text = filepath.read_text(encoding="utf-8")
+    cost_str = int(new_cost) if new_cost == int(new_cost) else new_cost
+
+    # Match cost: <number> in frontmatter (between --- delimiters)
+    updated = re.sub(
+        r"(?m)^(cost:\s*).*$",
+        f"\\g<1>{cost_str}",
+        text,
+        count=1,
+    )
+
+    if updated != text:
+        filepath.write_text(updated, encoding="utf-8")
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Markdown generation
 # ---------------------------------------------------------------------------
 
@@ -177,6 +285,9 @@ def generate_markdown(record):
     cost = fm.get("cost", 0) or 0
     cost_str = int(cost) if cost == int(cost) else cost
 
+    cost_items = fm.get("cost_items", [])
+    cost_table = generate_cost_table(cost_items)
+
     lines = [
         "---",
         f'title: "{fm.get("title", "")}"',
@@ -184,7 +295,6 @@ def generate_markdown(record):
         f'priority: {fm.get("priority", "medium")}',
         f'started: {fm.get("started", "")}',
         f'completed: {fm.get("completed") or ""}',
-        f'parts: {format_array_for_frontmatter(fm.get("parts", []))}',
         f'cost: {cost_str}',
         f'tags: {format_array_for_frontmatter(fm.get("tags", []), quoted=False)}',
         f'location: "{fm.get("location", "")}"',
@@ -202,9 +312,9 @@ def generate_markdown(record):
         "",
         body.get("progress", ""),
         "",
-        "## Parts List",
+        "## Cost Breakdown",
         "",
-        body.get("parts list", "| Part | Source | Cost | Ordered | Received |\n|------|--------|------|---------|----------|"),
+        cost_table,
         "",
         "## Notes",
         "",
@@ -224,26 +334,37 @@ def import_repair(conn, repair_id, filepath):
     fm, body_text = parse_frontmatter(text)
     body_sections = parse_body_sections(body_text)
 
+    # Parse cost items from the Cost Breakdown table (source of truth)
+    cost_items = parse_cost_table(body_text)
+    computed_cost = compute_cost_total(cost_items)
+
+    # Use computed cost from table if there are items, otherwise fall back to frontmatter
+    if cost_items:
+        cost = computed_cost
+    else:
+        cost = fm.get("cost", 0) or 0
+
     data = {
         "title": fm.get("title", repair_id),
         "status": fm.get("status", "not-started"),
         "priority": fm.get("priority", "medium"),
         "started": fm.get("started"),
         "completed": fm.get("completed"),
-        "parts": fm.get("parts", []),
-        "cost": fm.get("cost", 0) or 0,
+        "cost": cost,
+        "cost_items": cost_items,
         "tags": fm.get("tags", []),
         "location": fm.get("location", ""),
         "body": body_sections,
     }
 
     conn.execute("""
-        INSERT INTO repairs (id, title, status, priority, started, completed, cost, location, tags, parts, data, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO repairs (id, title, status, priority, started, completed, cost, location, tags, parts, cost_items, data, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, status=excluded.status, priority=excluded.priority,
             started=excluded.started, completed=excluded.completed, cost=excluded.cost,
             location=excluded.location, tags=excluded.tags, parts=excluded.parts,
+            cost_items=excluded.cost_items,
             data=excluded.data, updated_at=datetime('now')
     """, (
         repair_id,
@@ -255,9 +376,17 @@ def import_repair(conn, repair_id, filepath):
         data["cost"],
         data["location"],
         json.dumps(data["tags"]),
-        json.dumps(data["parts"]),
+        json.dumps([]),  # parts — legacy, always empty now
+        json.dumps(data["cost_items"]),
         json.dumps(data),
     ))
+
+    # Write computed cost back to frontmatter if it drifts from the table total
+    if cost_items:
+        fm_cost = fm.get("cost", 0) or 0
+        if abs(fm_cost - computed_cost) > 0.001:
+            update_frontmatter_cost(filepath, computed_cost)
+            print(f"    updated cost: {fm_cost} → {computed_cost}")
 
 
 def import_all(db_path, repairs_dir):
@@ -302,7 +431,7 @@ def export_json(db_path, json_path):
     """Export repairs to JSON for the web dashboard."""
     conn = init_db(db_path)
     rows = conn.execute("""
-        SELECT id, title, status, priority, started, completed, cost, location, tags, parts
+        SELECT id, title, status, priority, started, completed, cost, location, tags, cost_items
         FROM repairs ORDER BY
             CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
             started DESC
@@ -312,6 +441,9 @@ def export_json(db_path, json_path):
     summary = {
         "total": 0,
         "total_cost": 0,
+        "parts_cost": 0,
+        "labour_cost": 0,
+        "other_cost": 0,
         "by_status": {},
         "by_priority": {},
         "by_location": {},
@@ -320,7 +452,7 @@ def export_json(db_path, json_path):
 
     for row in rows:
         tags = json.loads(row["tags"]) if row["tags"] else []
-        parts = json.loads(row["parts"]) if row["parts"] else []
+        cost_items = json.loads(row["cost_items"]) if row["cost_items"] else []
         repair = {
             "id": row["id"],
             "title": row["title"],
@@ -329,15 +461,23 @@ def export_json(db_path, json_path):
             "started": row["started"],
             "completed": row["completed"],
             "cost": row["cost"] or 0,
+            "cost_items": cost_items,
             "location": row["location"] or "",
             "tags": tags,
-            "parts": parts,
         }
         repairs.append(repair)
 
         # Aggregate summary
         summary["total"] += 1
         summary["total_cost"] += repair["cost"]
+        for item in cost_items:
+            cost_type = item.get("type", "other")
+            if cost_type == "parts":
+                summary["parts_cost"] += item["cost"]
+            elif cost_type == "labour":
+                summary["labour_cost"] += item["cost"]
+            else:
+                summary["other_cost"] += item["cost"]
         summary["by_status"][repair["status"]] = summary["by_status"].get(repair["status"], 0) + 1
         summary["by_priority"][repair["priority"]] = summary["by_priority"].get(repair["priority"], 0) + 1
         if repair["location"]:
@@ -346,6 +486,9 @@ def export_json(db_path, json_path):
             summary["by_tag"][tag] = summary["by_tag"].get(tag, 0) + 1
 
     summary["total_cost"] = round(summary["total_cost"], 2)
+    summary["parts_cost"] = round(summary["parts_cost"], 2)
+    summary["labour_cost"] = round(summary["labour_cost"], 2)
+    summary["other_cost"] = round(summary["other_cost"], 2)
 
     output = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),

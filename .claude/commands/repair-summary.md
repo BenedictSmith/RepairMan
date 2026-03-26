@@ -5,7 +5,7 @@ Generate a summary of all repair projects.
 ## Instructions
 
 1. Read all `.md` files in the `repairs/` directory
-2. Parse YAML frontmatter from each file
+2. Parse YAML frontmatter and the `## Cost Breakdown` table from each file
 
 3. Generate a summary with these sections:
 
@@ -19,6 +19,9 @@ Count repairs by status:
 
 ### Cost Summary
 - Total spent across all repairs: $X.XX
+- Parts total: $X.XX
+- Labour total: $X.XX
+- Other costs: $X.XX
 - Total for completed repairs: $X.XX
 - Total for active (non-completed) repairs: $X.XX
 - Most expensive repair: "title" ($X.XX)

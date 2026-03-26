@@ -14,6 +14,7 @@
   .card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   .card .label { font-size: 0.8rem; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
   .card .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+  .card .breakdown { font-size: 0.75rem; color: #999; margin-top: 6px; line-height: 1.5; }
 
   /* Filters */
   .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; align-items: center; }
@@ -46,6 +47,15 @@
   .cost { font-variant-numeric: tabular-nums; }
   .empty { color: #ccc; }
   .footer { margin-top: 12px; font-size: 0.8rem; color: #999; text-align: right; }
+
+  /* Cost detail row */
+  .cost-detail td { background: #fafafa; padding: 6px 14px 10px 14px; border-top: none; }
+  .cost-detail-table { font-size: 0.8rem; color: #666; margin: 0; border-collapse: collapse; }
+  .cost-detail-table td { padding: 2px 12px 2px 0; border: none; background: transparent; }
+  .cost-detail-table .cost-type { text-transform: capitalize; color: #888; }
+  .cost-detail-table .cost-amount { font-variant-numeric: tabular-nums; text-align: right; }
+  .cost-toggle { cursor: pointer; }
+  .cost-toggle:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -112,6 +122,7 @@ const COLUMNS = [
 let DATA = { repairs: [], summary: {} };
 let sortCol = "priority";
 let sortAsc = true;
+let expandedRows = new Set();
 
 // Fetch data
 function loadData() {
@@ -136,11 +147,21 @@ function render() {
 
 function renderCards(s) {
   const active = (s.by_status?.["not-started"] || 0) + (s.by_status?.["in-progress"] || 0) + (s.by_status?.["waiting-on-parts"] || 0);
+
+  let costBreakdown = "";
+  if (s.parts_cost || s.labour_cost || s.other_cost) {
+    const parts = [];
+    if (s.parts_cost) parts.push("Parts: $" + s.parts_cost.toFixed(2));
+    if (s.labour_cost) parts.push("Labour: $" + s.labour_cost.toFixed(2));
+    if (s.other_cost) parts.push("Other: $" + s.other_cost.toFixed(2));
+    costBreakdown = `<div class="breakdown">${parts.join("<br>")}</div>`;
+  }
+
   document.getElementById("cards").innerHTML = [
     card("Total Repairs", s.total),
     card("Active", active),
     card("Completed", s.by_status?.completed || 0),
-    card("Total Cost", "$" + (s.total_cost || 0).toFixed(2)),
+    `<div class="card"><div class="label">Total Cost</div><div class="value">$${(s.total_cost || 0).toFixed(2)}</div>${costBreakdown}</div>`,
   ].join("");
 }
 
@@ -194,20 +215,52 @@ function sortRepairs(repairs) {
   });
 }
 
+function renderCostCell(r) {
+  if (!r.cost) return '<span class="empty">-</span>';
+  const items = r.cost_items || [];
+  if (items.length <= 1) return "$" + r.cost.toFixed(2);
+  return `<span class="cost-toggle" data-id="${r.id}">$${r.cost.toFixed(2)}</span>`;
+}
+
+function renderCostDetailRow(r) {
+  const items = r.cost_items || [];
+  if (!items.length) return "";
+  const rows = items.map(item =>
+    `<tr><td>${esc(item.description)}</td><td class="cost-type">${esc(item.type)}</td><td class="cost-amount">$${item.cost.toFixed(2)}</td></tr>`
+  ).join("");
+  return `<tr class="cost-detail" data-detail="${r.id}"><td colspan="${COLUMNS.length}"><table class="cost-detail-table">${rows}</table></td></tr>`;
+}
+
 function renderTable() {
   const filtered = sortRepairs(applyFilters(DATA.repairs));
   const tbody = document.getElementById("table-body");
   const totalCost = filtered.reduce((s, r) => s + (r.cost || 0), 0);
 
-  tbody.innerHTML = filtered.map(r => `<tr>
-    <td><strong>${esc(r.title)}</strong></td>
-    <td><span class="status-${r.status}">${esc(r.status)}</span></td>
-    <td><span class="badge badge-${r.priority}">${esc(r.priority)}</span></td>
-    <td>${r.started || '<span class="empty">-</span>'}</td>
-    <td class="cost">${r.cost ? "$" + r.cost.toFixed(2) : '<span class="empty">-</span>'}</td>
-    <td>${r.location || '<span class="empty">-</span>'}</td>
-    <td>${(r.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="empty">-</span>'}</td>
-  </tr>`).join("");
+  let html = "";
+  for (const r of filtered) {
+    html += `<tr>
+      <td><strong>${esc(r.title)}</strong></td>
+      <td><span class="status-${r.status}">${esc(r.status)}</span></td>
+      <td><span class="badge badge-${r.priority}">${esc(r.priority)}</span></td>
+      <td>${r.started || '<span class="empty">-</span>'}</td>
+      <td class="cost">${renderCostCell(r)}</td>
+      <td>${r.location || '<span class="empty">-</span>'}</td>
+      <td>${(r.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("") || '<span class="empty">-</span>'}</td>
+    </tr>`;
+    if (expandedRows.has(r.id)) {
+      html += renderCostDetailRow(r);
+    }
+  }
+  tbody.innerHTML = html;
+
+  // Attach click handlers for cost toggles
+  tbody.querySelectorAll(".cost-toggle").forEach(el => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.id;
+      if (expandedRows.has(id)) expandedRows.delete(id); else expandedRows.add(id);
+      renderTable();
+    });
+  });
 
   document.getElementById("footer").textContent = `${filtered.length} repair${filtered.length !== 1 ? "s" : ""} \u2022 $${totalCost.toFixed(2)} total`;
 }

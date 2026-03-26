@@ -3,8 +3,7 @@ title: "Fix kitchen faucet"
 status: in-progress
 priority: high
 started: 2026-03-26
-completed: 
-parts: ["cartridge valve", "plumber's tape"]
+completed:
 cost: 12.5
 tags: [plumbing, kitchen]
 location: "kitchen"
@@ -25,12 +24,12 @@ Kitchen faucet is dripping from the handle when turned off. Likely a worn cartri
 - 2026-03-26: Removed handle, confirmed cartridge is worn
 - 2026-03-26: Ordered replacement cartridge from Home Depot
 
-## Parts List
+## Cost Breakdown
 
-| Part | Source | Cost | Ordered | Received |
-|------|--------|------|---------|----------|
-| Moen 1225 cartridge | Home Depot | 10.50 | Yes | No |
-| Plumber's tape | Home Depot | 2.00 | Yes | Yes |
+| Item | Type | Cost |
+|------|------|------|
+| Moen 1225 cartridge | parts | $10.50 |
+| Plumber's tape | parts | $2.00 |
 
 ## Notes
 

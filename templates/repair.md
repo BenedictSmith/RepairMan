@@ -4,7 +4,6 @@ status: not-started
 priority: medium
 started: {{DATE}}
 completed:
-parts: []
 cost: 0
 tags: []
 location: "{{LOCATION}}"
@@ -22,10 +21,10 @@ location: "{{LOCATION}}"
 
 - {{DATE}}: Created repair ticket
 
-## Parts List
+## Cost Breakdown
 
-| Part | Source | Cost | Ordered | Received |
-|------|--------|------|---------|----------|
+| Item | Type | Cost |
+|------|------|------|
 
 ## Notes
 

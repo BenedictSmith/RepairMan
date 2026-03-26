@@ -4,9 +4,7 @@ status: in-progress
 priority: urgent
 started: 2026-03-26
 completed:
-parts:
-  - laser lens
-cost: 18.28
+cost: 15
 tags:
   - electronics
 location: ""
@@ -25,11 +23,21 @@ CD player won't read discs. Inserts but doesn't play or recognize CDs.
 - 2026-03-26: Created repair ticket
 - 2026-03-26: Ordered replacement laser lens/pickup assembly
 
-## Parts List
+## Cost Breakdown
 
-| Part | Source | Cost | Ordered | Received |
-|------|--------|------|---------|----------|
-| Laser lens/pickup assembly | — | 15.00 | Yes | No |
+| Item                       | Type  | Cost   |
+| -------------------------- | ----- | ------ |
+| Laser lens/pickup assembly | parts | $15.00 |
+
+
+
+
+
+
+
+
+
+
 
 ## Notes
 
